@@ -9,13 +9,19 @@
 #define ENABLE_A 14
 #define ENABLE_B 32
 
-#define IR_A 17
-#define IR_B 16
+#define IR_A 18
+//#define IR_B 16
 
+//SCL -> 22, SDA -> 21, 3.3v
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
 #define BUZZER 19
+
+//trig -> 5, echo -> 17, 5v
+#define SOUND_SPEED_2 0.017 //Sound speed / 2
+#define TRIG_PIN 5
+#define ECHO_PIN 17
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
@@ -40,7 +46,10 @@ void setup(){
 
   //Sensors
   pinMode(IR_A, INPUT_PULLUP);
-  pinMode(IR_B, INPUT_PULLUP);
+  //pinMode(IR_B, INPUT_PULLUP);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
 
   //Bluetooth
   serialBT.begin("AtomV1");  
@@ -75,6 +84,7 @@ void loop(){
   if(Serial.available()){
     String data = Serial.readString();
     serialBT.print(data);
+    printOLED(data);
   }
   
   if(serialBT.available()){
@@ -102,7 +112,7 @@ void loop(){
     //Commands
     if(data == 'p'){
       automatic = !automatic;
-    }
+    }else
 
     if(data == 'b'){
       buzz_state = !buzz_state;
@@ -111,28 +121,31 @@ void loop(){
     }else
 
     if(data == 'e'){
-      int speed = serialBT.read();
+      speed = serialBT.read();
       Serial.print("speed changed to ");
       Serial.println(speed);
-      ledcWrite(ENABLE_A, speed);
-      ledcWrite(ENABLE_B, speed);
+      setSpeed(speed);
     }else
 
     if(data == 'w'){
       Serial.println("forward");
+      setSpeed(speed);
       setMotors(HIGH, LOW, LOW, HIGH);
     }else
     if(data == 's'){
       Serial.println("backwards");
+      setSpeed(speed);
       setMotors(LOW, HIGH, HIGH, LOW);
     }else
     if(data == 'a'){
       Serial.println("left");
-      setMotors(HIGH, LOW, LOW, LOW);
+      setSpeed(210);
+      setMotors(HIGH, LOW, HIGH, LOW);
     }else
     if(data == 'd'){
       Serial.println("right");
-      setMotors(LOW, LOW, LOW, HIGH);
+      setSpeed(210);
+      setMotors(LOW, HIGH, LOW, HIGH);
     }else
     if(data == 'x'){
       Serial.println("stop");
@@ -141,8 +154,33 @@ void loop(){
 
     Serial.println(data);
   }
+
+  if(automatic){
+    //Detect foes
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);  
+    float dist = pulseIn(ECHO_PIN, HIGH) * SOUND_SPEED_2;
+    
+    if(dist < 10){
+      //Attack
+      setSpeed(255);
+      setMotors(HIGH, LOW, LOW, HIGH);
+    }else{
+      //Rotate
+      setSpeed(2);
+      setMotors(LOW, HIGH, LOW, HIGH);
+    }
+  }
   
   delay(32);
+}
+
+void setSpeed(int speed){
+  ledcWrite(ENABLE_A, speed);
+  ledcWrite(ENABLE_B, speed);
 }
 
 void setMotors(bool m1, bool m2, bool m3, bool m4){
