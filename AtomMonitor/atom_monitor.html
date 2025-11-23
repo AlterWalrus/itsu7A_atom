@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atom Monitor</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
+        .card { background: #333; border-radius: 15px; padding: 20px; max-width: 400px; margin: 20px auto; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        input { padding: 10px; border-radius: 5px; border: none; width: 70%; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .sensor-val { font-size: 4em; font-weight: bold; color: #4CAF50; }
+        .label { color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
+        .status { margin-top: 10px; font-size: 0.8em; }
+        .blink { animation: blinker 1s linear infinite; color: red;}
+        @keyframes blinker { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+	<div style="display: flex; align-items: center; justify-content: center; text-align: center; min-height: 20vh;">
+	  <img src="atom.png" height="48px" alt="Atom icon">
+	  <h1>Atom Bot Monitor</h1>
+	</div>   
+
+    <div id="setup">
+        <p>Ingresa la IP que muestra la OLED del Robot:</p>
+        <input type="text" id="ipAddress" placeholder="192.69.4.20">
+        <button onclick="startMonitoring()">Conectar</button>
+    </div>
+
+    <div id="monitor" style="display:none;">
+		<div class="status" id="statusMsg">Esperando datos...</div>
+	
+        <div class="card">
+            <div class="label">Sensor de Proximidad</div>
+            <div class="sensor-val" id="proxValue">--</div>
+            <div class="label">cm</div>
+        </div>
+        
+        
+    </div>
+
+    <script>
+        let intervalId;
+
+		document.getElementById("ipAddress").addEventListener("keypress", function(event) {
+		  if (event.key === "Enter") {
+			event.preventDefault();
+			startMonitoring();
+		  }
+		});
+		
+        function startMonitoring() {
+            const ip = document.getElementById('ipAddress').value;
+            if(ip.length < 7) return alert("IP inválida");
+
+            document.getElementById('setup').style.display = 'none';
+            document.getElementById('monitor').style.display = 'block';
+			
+            intervalId = setInterval(() => fetchData(ip), 1000);
+        }
+
+        async function fetchData(ip) {
+            const statusEl = document.getElementById('statusMsg');
+            const valEl = document.getElementById('proxValue');
+
+            try {
+                const response = await fetch(`http://${ip}/data`);
+                if (!response.ok) throw new Error("Error red");
+                
+                const data = await response.json();
+				
+                valEl.innerText = data.prox;
+                statusEl.innerText = "Conexión establecida";
+                statusEl.classList.remove('blink');
+                
+                if(data.prox < 15) valEl.style.color = "red";
+                else valEl.style.color = "#4CAF50";
+
+            } catch (error) {
+                statusEl.innerText = "Error de conexión";
+                statusEl.classList.add('blink');
+            }
+        }
+    </script>
+</body>
+</html>

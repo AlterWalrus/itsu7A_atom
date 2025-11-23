@@ -1,9 +1,10 @@
 #include "BluetoothSerial.h"
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
 #define MOTOR_IN1 27
 #define MOTOR_IN2 26
 #define MOTOR_IN3 25
@@ -12,37 +13,44 @@
 #define ENABLE_B 32
 
 #define IR_A 18
-//#define IR_B 16
-
-//SCL -> 22, SDA -> 21, 3.3v
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-
 #define BUZZER 19
 
-//This thing uses 5v
-#define SOUND_SPEED_2 0.017 //Sound speed / 2
+#define SOUND_SPEED_2 0.017
 #define TRIG_PIN 5
 #define ECHO_PIN 17
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+BluetoothSerial serial_bt;
+WebServer server(80);
 
-BluetoothSerial serialBT;
 int led_state = LOW;
 int buzz_state = LOW;
+int speed_val = 200;
+bool automatic = false;
 
-AsyncWebServer server(80);
-String ip;
-bool connecting_wifi = false;
+char bt_buffer[128];
+int bt_index = 0;
+unsigned long prev_dist_time = 0;
+int dist = 0;
 
 const int freq = 30000;
-const int pwmChannel = 0;
+const int pwm_channel = 0;
 const int resolution = 8;
-int speed = 200;
 
-String text_buffer = "";
-
-bool automatic = false;
+//Function Prototypes
+void processCmd(char* cmd);
+int getDistance();
+void connectWiFi(String ssid, String pass);
+void setSpeed(int s);
+void setMotors(bool m1, bool m2, bool m3, bool m4);
+void beep(int times);
+void printOLED(String msg);
+void drawHappy();
+void drawSad();
+void drawWow();
+void drawPacMan();
 
 void setup(){
   Serial.begin(9600);
@@ -52,46 +60,38 @@ void setup(){
 
   //Sensors
   pinMode(IR_A, INPUT_PULLUP);
-  //pinMode(IR_B, INPUT_PULLUP);
-
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
   //Bluetooth
-  serialBT.begin("AtomV1");
+  serial_bt.begin("AtomV1");
 
-  //Wifi
-  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-  server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
-    char buffer[64]; 
-    int lectura = random(0, 50); 
-    snprintf(buffer, sizeof(buffer), "{\"prox\":%d}", lectura);
-    request->send(200, "application/json", buffer);
+  //Wifi Server Config (Sequential)
+  server.enableCORS(true); 
+  server.on("/data", [](){
+    char json_buffer[64];
+    snprintf(json_buffer, sizeof(json_buffer), "{\"prox\":%d}", dist);
+    server.send(200, "application/json", json_buffer);
   });
-  /*
-  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-  server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
-      String json = "{\"prox\":" + String(random(10, 50)) + ", \"estado\":\"online\"}";
-      request->send(200, "application/json", json);
+  server.onNotFound([](){
+    server.send(404, "text/plain", "Not found");
   });
-  */
-  
 
-  //Motor
+  //Motors
   pinMode(MOTOR_IN1, OUTPUT);
   pinMode(MOTOR_IN2, OUTPUT);
   pinMode(MOTOR_IN3, OUTPUT);
   pinMode(MOTOR_IN4, OUTPUT);
   pinMode(ENABLE_A, OUTPUT);
   pinMode(ENABLE_B, OUTPUT);
-  ledcAttachChannel(ENABLE_A, freq, resolution, pwmChannel);
-  ledcAttachChannel(ENABLE_B, freq, resolution, pwmChannel);
+  ledcAttachChannel(ENABLE_A, freq, resolution, pwm_channel);
+  ledcAttachChannel(ENABLE_B, freq, resolution, pwm_channel);
 
-  ledcWrite(ENABLE_A, speed);
-  ledcWrite(ENABLE_B, speed);
+  ledcWrite(ENABLE_A, speed_val);
+  ledcWrite(ENABLE_B, speed_val);
 
   //OLED
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
   }
@@ -103,164 +103,160 @@ void setup(){
 }
 
 void loop(){
-  if(Serial.available()){
-    String data = Serial.readString();
-    data.trim();
-    //serialBT.print(data);
-    //printOLED(data);
+  //Handle WiFi Client
+  if (WiFi.status() == WL_CONNECTED) {
+     server.handleClient(); 
+  }
 
+  //Sensors & Auto Mode
+  if(millis() - prev_dist_time > 100){
+    dist = getDistance();
+
+    if(automatic){
+      if(dist < 10){
+        //Attack
+        setSpeed(255);
+        setMotors(HIGH, LOW, LOW, HIGH);
+      }else{
+        //Rotate
+        setSpeed(180);
+        setMotors(LOW, HIGH, LOW, HIGH);
+		delay(500);
+		setMotors(LOW, LOW, LOW, LOW);
+		delay(500);
+      }
+    }
+    prev_dist_time = millis();
+  }
+
+  //Bluetooth Handling
+  while(serial_bt.available()){
+    char c = serial_bt.read();
+
+    if(c == '\n' || c == '\r'){
+      if(bt_index > 0){
+        bt_buffer[bt_index] = '\0';
+        processCmd(bt_buffer);
+        bt_index = 0;
+      }
+    }else{
+      if(bt_index < 127) {
+        bt_buffer[bt_index] = c;
+        bt_index++;
+      }
+    }
   }
   
-  if(serialBT.available()){
-    if(connecting_wifi){
-      String data = serialBT.readString();
-      int comma = data.indexOf(",");
+  //Small delay for stability
+  delay(2);
+}
 
-      String ssid = data.substring(1, comma);
-      String pass = data.substring(comma + 1, data.length()-1);
-      Serial.println(ssid);
-      Serial.println(pass);
+void processCmd(char* cmd) {
+  String data = String(cmd);
+  data.trim();
+  
+  Serial.print("CMD: "); Serial.println(data);
+
+  //Emotes
+  if(data == ":)") { drawHappy(); return; }
+  if(data == ":(") { drawSad(); return; }
+  if(data == ":o") { drawWow(); return; }
+  if(data == ":v") { drawPacMan(); return; }
+
+  //WIFI
+  if (data.startsWith("WIFI:")) {
+    printOLED("Conectando WiFi...");
+    int comma = data.indexOf(",");
+    if(comma > 0) {
+      String ssid = data.substring(5, comma);
+      String pass = data.substring(comma + 1);
       connectWiFi(ssid, pass);
-      connecting_wifi = false;
-      return;
     }
-
-    char data = serialBT.read();
-
-    //Message reading
-    if(data == '-'){
-      for(int i = 0; i < 64; i++){
-        char c = serialBT.read();
-        if(c == '-') break;
-        text_buffer += c;
-      }
-
-      //Message read, do something with it
-      if(text_buffer == "wifi"){
-        printOLED("Esperando red...");
-        connecting_wifi = true;
-        return;
-      }else
-
-      if(text_buffer == "led"){
-        led_state = !led_state;
-        digitalWrite(2, led_state);
-      }
-
-      Serial.println(text_buffer);
-      printOLED(text_buffer);
-      text_buffer = "";
-    }
-
-    //Commands
-    if(data == 'p'){
-      automatic = !automatic;
-      Serial.println(automatic ? "AUTOMATIC ACTIVATED" : "AUTOMATIC DEACTIVATED");
-      beep(automatic ? 2 : 1);
-    }else
-
-    if(data == 'b'){
-      buzz_state = !buzz_state;
-      digitalWrite(BUZZER, buzz_state);
-      Serial.println(buzz_state ? "BUZZER ON" : "BUZZER OFF");
-    }else
-
-    if(data == ':'){
-      char c = serialBT.read();
-      Serial.println("EMOTE CHANGED");
-      if(c == ')'){
-        drawHappy();
-      }else
-      if(c == '('){
-        drawSad();
-      }else
-      if(c == 'o'){
-        drawWow();
-      }else
-      if(c == 'v'){
-        drawPacMan();
-      }
-    }else
-
-    if(data == 'e'){
-      speed = serialBT.read();
-      Serial.print("speed changed to ");
-      Serial.println(speed);
-      setSpeed(speed);
-    }else
-
-    if(data == 'w'){
-      Serial.println("forward");
-      setSpeed(speed);
-      setMotors(HIGH, LOW, LOW, HIGH);
-    }else
-    if(data == 's'){
-      Serial.println("backwards");
-      setSpeed(speed);
-      setMotors(LOW, HIGH, HIGH, LOW);
-    }else
-    if(data == 'a'){
-      Serial.println("left");
-      setSpeed(210);
-      setMotors(HIGH, LOW, HIGH, LOW);
-    }else
-    if(data == 'd'){
-      Serial.println("right");
-      setSpeed(210);
-      setMotors(LOW, HIGH, LOW, HIGH);
-    }else
-    if(data == 'x'){
-      Serial.println("stop");
-      setMotors(LOW, LOW, LOW, LOW);
-    }
-
-    Serial.println(data);
+    return;
   }
 
-  if(automatic){
-    //Detect foes
+  //SPEED
+  if(data.startsWith("SPEED:")){
+    int new_speed = atoi(cmd + 6); 
+    if (new_speed >= 0 && new_speed <= 255) {
+      speed_val = new_speed;
+      setSpeed(speed_val);
+      Serial.print("Speed set to: ");
+      Serial.println(speed_val);
+    }
+    return;
+  }
+
+  //LED Toggle
+  if (data == "LED") {
+     led_state = !led_state;
+     digitalWrite(2, led_state);
+     return;
+  }
+
+  //Normal messages are sent via RF (soon i hope lol)
+  if(data.length() > 1){
+    printOLED(data);
+    return;
+  }
+
+  //Single char commands
+  char c = data.charAt(0);
+  
+  if (c == 'p') {
+    automatic = !automatic;
+    Serial.println(automatic ? "AUTO ON" : "AUTO OFF");
+    setMotors(LOW, LOW, LOW, LOW);
+    beep(automatic ? 2 : 1);
+  }
+  else if (c == 'b') {
+    buzz_state = !buzz_state;
+    digitalWrite(BUZZER, buzz_state);
+  }
+  else if (c == 'w') { setMotors(HIGH, LOW, LOW, HIGH); }
+  else if (c == 's') { setMotors(LOW, HIGH, HIGH, LOW); }
+  else if (c == 'a') { setMotors(HIGH, LOW, HIGH, LOW); }
+  else if (c == 'd') { setMotors(LOW, HIGH, LOW, HIGH); }
+  else if (c == 'x') { setMotors(LOW, LOW, LOW, LOW); }
+}
+
+int getDistance() {
     digitalWrite(TRIG_PIN, LOW);
     delayMicroseconds(2);
     digitalWrite(TRIG_PIN, HIGH);
     delayMicroseconds(10);
     digitalWrite(TRIG_PIN, LOW);  
-    float dist = pulseIn(ECHO_PIN, HIGH) * SOUND_SPEED_2;
-    
-    if(dist < 10){
-      //Attack
-      setSpeed(255);
-      setMotors(HIGH, LOW, LOW, HIGH);
-    }else{
-      //Rotate
-      setSpeed(210);
-      setMotors(LOW, HIGH, LOW, HIGH);
-    }
-  }
-  
-  //delay(32);
-  vTaskDelay(32 / portTICK_PERIOD_MS);
+    float d = pulseIn(ECHO_PIN, HIGH, 30000); 
+    if(d == 0) return 100; 
+    return d * SOUND_SPEED_2;
 }
 
 void connectWiFi(String ssid, String pass){
   WiFi.begin(ssid.c_str(), pass.c_str());
-  for(int i = 0; i < 30; i++){
-    if(WiFi.status() == WL_CONNECTED){
+  //Disable sleep to improve stability with BT
+  WiFi.setSleep(false); 
+  
+  int attempts = 0;
+  while(WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    attempts++;
+  }
+
+  if(WiFi.status() == WL_CONNECTED){
       server.begin();
-      ip = WiFi.localIP().toString();
-      serialBT.println("IP: " + ip);
+      String ip = WiFi.localIP().toString();
+      serial_bt.println("IP: " + ip);
       printOLED(ip);
       beep(3);
-      return;
-    }
-    delay(500);
+  } else {
+      printOLED("WiFi Error");
+      beep(1);
   }
-  printOLED("Error al  conectar  :(");
-  Serial.println("Error al  conectar  :(");
 }
 
-void setSpeed(int speed){
-  ledcWrite(ENABLE_A, speed);
-  ledcWrite(ENABLE_B, speed);
+void setSpeed(int s){
+  ledcWrite(ENABLE_A, s);
+  ledcWrite(ENABLE_B, s);
 }
 
 void setMotors(bool m1, bool m2, bool m3, bool m4){
@@ -286,8 +282,9 @@ void printOLED(String msg){
   display.display();
 }
 
+//Drawing Functions
 void drawHappy(){
-  Serial.println("drawing happy-face");
+  Serial.println("Drawing happy face");
   display.clearDisplay();
   int y = 1;
   for(int i = 0; i < 16; i++){
@@ -298,7 +295,7 @@ void drawHappy(){
 }
 
 void drawSad(){
-  Serial.println("drawing sad-face");
+  Serial.println("Drawing sad face");
   display.clearDisplay();
   int y = 1;
   for(int i = 0; i < 16; i++){
@@ -309,14 +306,14 @@ void drawSad(){
 }
 
 void drawWow(){
-  Serial.println("drawing wow-face");
+  Serial.println("Drawing wow face");
   display.clearDisplay();
   display.fillCircle(64, 32, 16, WHITE);
   display.display();
 }
 
 void drawPacMan(){
-  Serial.println("drawing puck-face");
+  Serial.println("Drawing pacman face");
   display.clearDisplay();
   for(int i = 0; i < 16; i++){
     display.fillCircle(32+(i*4), 32-i, 4, WHITE);
