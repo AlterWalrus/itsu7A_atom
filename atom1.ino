@@ -12,7 +12,7 @@
 #define ENABLE_A 14
 #define ENABLE_B 32
 
-#define IR_A 18
+#define IR_PIN 18
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define BUZZER 19
@@ -27,13 +27,14 @@ WebServer server(80);
 
 int led_state = LOW;
 int buzz_state = LOW;
-int speed_val = 200;
+int speed = 200;
 bool automatic = false;
 
 char bt_buffer[128];
 int bt_index = 0;
 unsigned long prev_dist_time = 0;
 int dist = 0;
+bool line = false;
 
 const int freq = 30000;
 const int pwm_channel = 0;
@@ -59,7 +60,7 @@ void setup(){
   pinMode(BUZZER, OUTPUT);
 
   //Sensors
-  pinMode(IR_A, INPUT_PULLUP);
+  pinMode(IR_PIN, INPUT_PULLUP);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
@@ -70,7 +71,7 @@ void setup(){
   server.enableCORS(true); 
   server.on("/data", [](){
     char json_buffer[64];
-    snprintf(json_buffer, sizeof(json_buffer), "{\"prox\":%d}", dist);
+    snprintf(json_buffer, sizeof(json_buffer), "{\"prox\":%d,\"line\":%d,\"speed\":%d,\"auto\":%d}", dist, line, speed, automatic);
     server.send(200, "application/json", json_buffer);
   });
   server.onNotFound([](){
@@ -87,8 +88,8 @@ void setup(){
   ledcAttachChannel(ENABLE_A, freq, resolution, pwm_channel);
   ledcAttachChannel(ENABLE_B, freq, resolution, pwm_channel);
 
-  ledcWrite(ENABLE_A, speed_val);
-  ledcWrite(ENABLE_B, speed_val);
+  ledcWrite(ENABLE_A, speed);
+  ledcWrite(ENABLE_B, speed);
 
   //OLED
   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -111,6 +112,7 @@ void loop(){
   //Sensors & Auto Mode
   if(millis() - prev_dist_time > 100){
     dist = getDistance();
+    line = digitalRead(IR_PIN);
 
     if(automatic){
       if(dist < 10){
@@ -121,9 +123,9 @@ void loop(){
         //Rotate
         setSpeed(180);
         setMotors(LOW, HIGH, LOW, HIGH);
-		delay(500);
-		setMotors(LOW, LOW, LOW, LOW);
-		delay(500);
+        delay(500);
+        setMotors(LOW, LOW, LOW, LOW);
+        delay(500);
       }
     }
     prev_dist_time = millis();
@@ -179,10 +181,10 @@ void processCmd(char* cmd) {
   if(data.startsWith("SPEED:")){
     int new_speed = atoi(cmd + 6); 
     if (new_speed >= 0 && new_speed <= 255) {
-      speed_val = new_speed;
-      setSpeed(speed_val);
+      speed = new_speed;
+      setSpeed(speed);
       Serial.print("Speed set to: ");
-      Serial.println(speed_val);
+      Serial.println(speed);
     }
     return;
   }

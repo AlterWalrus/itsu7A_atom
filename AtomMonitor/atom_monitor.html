@@ -18,7 +18,7 @@
     </style>
 </head>
 <body>
-	<div style="display: flex; align-items: center; justify-content: center; text-align: center; min-height: 20vh;">
+	<div style="display: flex; align-items: center; justify-content: center; text-align: center; min-height: 10vh;">
 	  <img src="atom.png" height="48px" alt="Atom icon">
 	  <h1>Atom Bot Monitor</h1>
 	</div>   
@@ -30,15 +30,30 @@
     </div>
 
     <div id="monitor" style="display:none;">
-		<div class="status" id="statusMsg">Esperando datos...</div>
-	
+		<div style="min-height: 4vh;" class="status" id="statusMsg">Esperando datos...</div>
+		
+		<div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+			<div>
+				<div class="label">Velocidad</div>
+				<div id="speedValue">--</div>
+			</div>
+			
+			<div>
+				<div class="label">Autónomo</div>
+				<div id="autoValue">--</div>
+			</div>
+		</div>
+		
         <div class="card">
             <div class="label">Sensor de Proximidad</div>
             <div class="sensor-val" id="proxValue">--</div>
             <div class="label">cm</div>
         </div>
-        
-        
+		
+		<div class="card">
+            <div class="label">Sensor de línea</div>
+            <div class="sensor-val" id="lineValue">-</div>
+        </div>
     </div>
 
     <script>
@@ -62,8 +77,11 @@
         }
 
         async function fetchData(ip) {
-            const statusEl = document.getElementById('statusMsg');
-            const valEl = document.getElementById('proxValue');
+            const status = document.getElementById('statusMsg');
+            const prox = document.getElementById('proxValue');
+			const line = document.getElementById('lineValue');
+			const speed = document.getElementById('speedValue');
+			const auto = document.getElementById('autoValue');
 
             try {
                 const response = await fetch(`http://${ip}/data`);
@@ -71,16 +89,22 @@
                 
                 const data = await response.json();
 				
-                valEl.innerText = data.prox;
-                statusEl.innerText = "Conexión establecida";
-                statusEl.classList.remove('blink');
+				status.innerText = "Conexión establecida";
+                status.classList.remove('blink');
+				
+				prox.innerText = data.prox;
+				prox.style.color = data.prox < 15 ? "red" : "#4CAF50";
+				
+				line.innerText = data.line ? "No" : "Sí";
+				line.style.color = data.line ? "black" : "white";
                 
-                if(data.prox < 15) valEl.style.color = "red";
-                else valEl.style.color = "#4CAF50";
-
+				speed.innerText = data.speed;
+				
+				auto.innerText = data.auto ? "No" : "Sí";
+				
             } catch (error) {
-                statusEl.innerText = "Error de conexión";
-                statusEl.classList.add('blink');
+                status.innerText = "Error de conexión";
+                status.classList.add('blink');
             }
         }
     </script>
