@@ -21,6 +21,9 @@
 #define TRIG_PIN 5
 #define ECHO_PIN 17
 
+#define RF_RX 15
+#define RF_TX 16
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 BluetoothSerial serial_bt;
 WebServer server(80);
@@ -41,7 +44,7 @@ const int pwm_channel = 0;
 const int resolution = 8;
 
 //Function Prototypes
-void processCmd(char* cmd);
+void processCMD(char* cmd);
 int getDistance();
 void connectWiFi(String ssid, String pass);
 void setSpeed(int s);
@@ -77,6 +80,9 @@ void setup(){
   server.onNotFound([](){
     server.send(404, "text/plain", "Not found");
   });
+
+  //RF
+  Serial1.begin(57600, SERIAL_8N1, RF_RX, RF_TX);
 
   //Motors
   pinMode(MOTOR_IN1, OUTPUT);
@@ -115,7 +121,7 @@ void loop(){
     line = digitalRead(IR_PIN);
 
     if(automatic){
-      if(dist < 10){
+      if(dist < 15){
         //Attack
         setSpeed(255);
         setMotors(HIGH, LOW, LOW, HIGH);
@@ -123,7 +129,7 @@ void loop(){
         //Rotate
         setSpeed(180);
         setMotors(LOW, HIGH, LOW, HIGH);
-        delay(500);
+        delay(100);
         setMotors(LOW, LOW, LOW, LOW);
         delay(500);
       }
@@ -138,7 +144,7 @@ void loop(){
     if(c == '\n' || c == '\r'){
       if(bt_index > 0){
         bt_buffer[bt_index] = '\0';
-        processCmd(bt_buffer);
+        processCMD(bt_buffer);
         bt_index = 0;
       }
     }else{
@@ -148,12 +154,25 @@ void loop(){
       }
     }
   }
+
+  //RF
+  if(Serial1.available()){
+    String data = Serial1.readStringUntil('\n');
+    if(data.startsWith("+RCV=")){
+      int comma1 = data.indexOf(',');
+      int comma2 = data.indexOf(',', comma1 + 1);
+      int comma3 = data.indexOf(',', comma2 + 1);
+      String msg = data.substring(comma2 + 1, comma3);
+      Serial.println(msg);
+      serial_bt.println(msg);
+    }
+  }
   
   //Small delay for stability
-  delay(2);
+  delay(32);
 }
 
-void processCmd(char* cmd) {
+void processCMD(char* cmd) {
   String data = String(cmd);
   data.trim();
   
@@ -196,9 +215,10 @@ void processCmd(char* cmd) {
      return;
   }
 
-  //Normal messages are sent via RF (soon i hope lol)
+  //Normal messages are sent via RF
   if(data.length() > 1){
     printOLED(data);
+    sendRF(data);
     return;
   }
 
@@ -282,6 +302,14 @@ void printOLED(String msg){
   display.setCursor(0, 8);
   display.print(msg);
   display.display();
+}
+
+void sendRF(String data){
+  int length = data.length();
+  String msg = data = "AT+SEND=50," + String(length) + "," + data;
+  Serial.print("Enviando: ");
+  Serial.println(msg);
+  Serial1.println(msg);
 }
 
 //Drawing Functions
