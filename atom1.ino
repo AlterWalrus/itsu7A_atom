@@ -47,19 +47,6 @@ const int freq = 30000;
 const int pwm_channel = 0;
 const int resolution = 8;
 
-//Function Prototypes
-void processCMD(char* cmd);
-int getDistance();
-void connectWiFi(String ssid, String pass);
-void setSpeed(int s);
-void setMotors(bool m1, bool m2, bool m3, bool m4);
-void beep(int times);
-void printOLED(String msg);
-void drawHappy();
-void drawSad();
-void drawWow();
-void drawPacMan();
-
 void setup(){
   Serial.begin(9600);
 
@@ -74,7 +61,7 @@ void setup(){
   //Bluetooth
   serial_bt.begin("AtomV1");
 
-  //Wifi Server Config (Sequential)
+  //Wifi Server Config (Sequential cuz otherwise things break)
   server.enableCORS(true); 
   server.on("/data", [](){
     char json_buffer[64];
@@ -162,7 +149,6 @@ void loop(){
     }
   }
   
-  //Small delay for stability
   delay(32);
 }
 
@@ -341,9 +327,14 @@ void printOLED(String msg){
   display.display();
 }
 
+/*
+	CHANGE
+	ATOM sends to 51
+	NOISY sends to 50
+*/
 void sendRF(String data){
   int length = data.length();
-  String msg = data = "AT+SEND=50," + String(length) + "," + data;
+  String msg = data = "AT+SEND=51," + String(length) + "," + data;
   Serial.print("Enviando: ");
   Serial.println(msg);
   Serial1.println(msg);
