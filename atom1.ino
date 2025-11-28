@@ -24,6 +24,10 @@
 #define RF_RX 15
 #define RF_TX 16
 
+unsigned long prev_action = 0;
+enum State { IDLE, ATTACKING, ROTATING, PAUSED };
+State curr_state = IDLE;
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 BluetoothSerial serial_bt;
 WebServer server(80);
@@ -35,7 +39,7 @@ bool automatic = false;
 
 char bt_buffer[128];
 int bt_index = 0;
-unsigned long prev_dist_time = 0;
+unsigned long prev_sensor = 0;
 int dist = 0;
 bool line = false;
 
@@ -116,25 +120,14 @@ void loop(){
   }
 
   //Sensors & Auto Mode
-  if(millis() - prev_dist_time > 100){
+  if(millis() - prev_sensor > 100){
     dist = getDistance();
-    line = digitalRead(IR_PIN);
+    line = !digitalRead(IR_PIN);
 
     if(automatic){
-      if(dist < 15){
-        //Attack
-        setSpeed(255);
-        setMotors(HIGH, LOW, LOW, HIGH);
-      }else{
-        //Rotate
-        setSpeed(180);
-        setMotors(LOW, HIGH, LOW, HIGH);
-        delay(100);
-        setMotors(LOW, LOW, LOW, LOW);
-        delay(500);
-      }
+      autoPilot();
     }
-    prev_dist_time = millis();
+    prev_sensor = millis();
   }
 
   //Bluetooth Handling
@@ -157,6 +150,7 @@ void loop(){
 
   //RF
   if(Serial1.available()){
+    Serial.println("RF incoming!");
     String data = Serial1.readStringUntil('\n');
     if(data.startsWith("+RCV=")){
       int comma1 = data.indexOf(',');
@@ -170,6 +164,49 @@ void loop(){
   
   //Small delay for stability
   delay(32);
+}
+
+void autoPilot(){
+  unsigned long currentTime = millis();
+  
+  if(dist < 20){
+    // Attack
+    curr_state = ATTACKING;
+    setSpeed(255);
+    setMotors(HIGH, LOW, LOW, HIGH);
+    
+    // Look for line
+    if(line){
+      setMotors(LOW, LOW, LOW, LOW);
+      curr_state = IDLE;
+    }
+  }else{
+    // Handle rotation states
+    switch(curr_state){
+      case IDLE:
+      case ATTACKING:
+        // Start rotating
+        setSpeed(180);
+        setMotors(LOW, HIGH, LOW, HIGH);
+        prev_action = currentTime;
+        curr_state = ROTATING;
+        break;
+        
+      case ROTATING:
+        if(currentTime - prev_action >= 100){
+          setMotors(LOW, LOW, LOW, LOW);
+          prev_action = currentTime;
+          curr_state = PAUSED;
+        }
+        break;
+        
+      case PAUSED:
+        if(currentTime - prev_action >= 400){
+          curr_state = IDLE;
+        }
+        break;
+    }
+  }
 }
 
 void processCMD(char* cmd) {
